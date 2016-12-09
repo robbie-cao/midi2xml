@@ -1,18 +1,19 @@
 <?php
 /****************************************************************************
 Software: Midi Class
-Version:  1.3
-Date:     2003/12/25
+Version:  1.7.3
+Date:     2008/05/30
 Author:   Valentin Schmidt
 Contact:  fluxus@freenet.de
 License:  Freeware
 
 You may use and modify this software as you wish.
 
-Changes: - SeqSpec fixed
-         - DTD updated (v0.9, http://www.musicxml.org/dtds/midixml.dtd)
+Last Changes:
+	+ bug bix in newTrack(): -1 was missing to return
+	+ bug fix parsing sysex messages
+
 ****************************************************************************/
-include('Linkedlist.php');
 
 class Midi{
 
@@ -20,7 +21,8 @@ class Midi{
 var $tracks;          //array of tracks, where each track is array of message strings
 var $timebase;        //timebase = ticks per frame (quarter note)
 var $tempo;           //tempo as integer (0 for unknown)
-var $tempoMsgNum;			//position of tempo event in track 0
+var $tempoMsgNum;     //position of tempo event in track 0
+var $type;
 
 /****************************************************************************
 *                                                                           *
@@ -70,7 +72,7 @@ function setBpm($bpm){
 // returns bpm corresponding to tempo
 //---------------------------------------------------------------
 function getBpm(){
-	return ($this->tempo!=0)?60000000/$this->tempo:0;
+	return ($this->tempo!=0)?(int)(60000000/$this->tempo):0;
 }
 
 //---------------------------------------------------------------
@@ -91,7 +93,7 @@ function getTimebase(){
 //---------------------------------------------------------------
 function newTrack(){
 	array_push($this->tracks,array());
-	return count($this->tracks);
+	return count($this->tracks)-1; # -1 was missing
 }
 
 //---------------------------------------------------------------
@@ -163,7 +165,7 @@ function deleteTrack($tn){
 }
 
 //---------------------------------------------------------------
-// deletes track $tn
+// returns number of tracks
 //---------------------------------------------------------------
 function getTrackCount(){
 	return count($this->tracks);
@@ -192,7 +194,7 @@ function transposeTrack($tn, $dn){
 	$track = $this->tracks[$tn];
   $mc = count($track);
   for ($i=0;$i<$mc;$i++){
-  	$msg = explode(' ',$track[$i]);
+	$msg = explode(' ',$track[$i]);
 		if ($msg[1] == 'On' || $msg[1] == 'Off'){
 			eval("\$".$msg[3].';'); // $n
 			$n = max(0,min(127,$n+$dn));
@@ -300,220 +302,6 @@ function getTrackTxt($tn,$ttype=0){ //0:absolute, 1:delta
 	return $str;
 }
 
-
-//---------------------------------------------------------------
-// returnar GRIFF XML
-//---------------------------------------------------------------
-function getGriffXml($ttype=0){ //0:absolute, 1:delta
-	$tracks = $this->tracks;
-	$tc = count($tracks);
-	$type = ($tc>1)?1:0;
-	
-        $timebase = $this->getTimebase();
-        $bpm=$this->getBpm();
-
-       $track = $tracks[0];
-        $mc = count($track);
-        for ($j=0;$j<$mc;$j++){
-        $msg = explode(' ',$track[$j]);
-           if ($msg[1]=='TimeSig'){
-  	     $ts = explode('/',$msg[2]);
-          }
-        }
-   if ($ts[1]=8){  //om nämnaren i "TimeSig" är 8(8-delsnötter) THEN dubbla tempot
-         $bpm=1.0375*$bpm;
-         }
-
-$xml .= "<GriffDocument Version=\"2\">
-  <Studio>\n
-    <Sequencer Tempo=\"$bpm\" BeatsPerBar=\"$ts[0]\" PulsesPerQuarterNote=\"$timebase\">
-      <PatternList>";
-
-
-$LIST= new LinkedList();   //skapar Lista LIST, instans av klassen LinkedList
-$LIST2= new LinkedList();     //till specialfall
-
-if ($type==0){$i=0; $l=0; $m=0;}      //Kolla midiformat om 0 räkna med bara med första TRACKEN
-else {$i=1; $l=1; $m=1;}               ////Kolla midiformat om 1 räkna med från och med TRACK=1
-
-for ($i;$i<$tc;$i++){  //TRACKS = VÅRA PATTERNS
-
-  	$track = $tracks[$i];
-  	$mc = count($track);
-
-        for ($j=0;$j<$mc;$j++){            //EVENTS
-  		$msg = explode(' ',$track[$j]); //ta ut message ur EVENTS-arrayen
-  		$t = (int) $msg[0];        //Absoluttid
-
-                        if ($msg[1]=='On'){
-                                   eval("\$".$msg[2].';');  //channel            $ch
-                                   eval("\$".$msg[3].';');  //note               $n
-                                   eval("\$".$msg[4].';');  //velocity           $v
-
-                                   $On=$LIST->ReturnOnValues($n);
-
-                                   if ($n==$On[3])  //Om aktuella värdet finns: gör ny lista
-                                   {
-
-                                           ${"ITEM2".$j} = new ListItem($n,$v,$t,$ch);
-                                           $LIST2->ListInsert(${"ITEM2".$j});
-
-                                   }
-
-                                   if ($LIST->ListSearch($n)==NULL) //Om det aktuella värdet inte finns i listan: skapa ITEMET
-                                         {
-                                         ${"ITEM".$j} = new ListItem($n,$v,$t,$ch);
-                                         $LIST->ListInsert(${"ITEM".$j});
-
-                                                  if (${"OnPattern".$i}==NULL)  //Sparar ner värdet när en viss pattern startar
-                                                  {
-                                                    $OnPatternOffs=$LIST->FormatTimeOffs($ts[0],$t,$timebase);
-                                                    ${"OnPattern".$i}="$OnPatternOffs[0]:$OnPatternOffs[1]:$OnPatternOffs[2]";
-                                                    $OnPatternTick = $t;
-                                                  }
-                                         }
-
-                                    if ($v==0)  //Om någon ton har NoteOn samt velocity=0 så ska den skrivas ut (motsvarar NoteOff)
-                                         {
-                                       eval("\$".$msg[3].';');  //note               $n
-
-                                       $On=$LIST->ReturnOnValues($n);   //Returnerar NoteOn-värdena (ITEM-contents) för den specifika tonens ITEM i listan
-                                       $length=$t-$On[0];
-
-                                         $z=$LIST->ListSearch($n);
-
-                                         $Llength=$LIST->FormatTimeLen($ts[0],$length,$timebase);
-                                         $Offset=$LIST->FormatTimeOffs($ts[0],$On[0]-$OnPatternTick,$timebase);
-
-                                          ${"patternLen".$i}=$LIST->patternLength($ts[0],$t,$timebase,$OnPatternTick);
-                                          ${"sectionLen".$i}=$LIST->sectionLength($ts[0],$t,$timebase);
-
-                                           ${"events".$i}[$j] = "
-                <Note Offset=\"$Offset[0]:$Offset[1]:$Offset[2]\" Pitch=\"$n\" Velocity=\"$On[1]\" Length=\"$Llength[0]:$Llength[1]:$Llength[2]\"/>";
-                                            $LIST->ListDelete($z);
-                                            $songLen[$i]=$t;
-                                         }
-                        }
-
-                        elseif ($msg[1]=='Off') {  //NOTE OFF
-
-                                        eval("\$".$msg[3].';');  //note   $n
-
-                                        $On=$LIST->ReturnOnValues($n);   //Returnerar NoteOn-värdena (ITEM-contents) för den specifika tonens ITEM i listan
-                                        $length=$t-$On[0];
-                                        $z=$LIST->ListSearch($n);
-
-                                        $On2=$LIST2->ReturnOnValues($n);   //Returnerar NoteOn-värdena (ITEM-contents) för den specifika tonens ITEM i listan
-                                        $length2=$t-$On2[0];
-                                        $zz=$LIST2->ListSearch($n);
-
-                                       //if ($z!=NULL AND $zz==NULL){
-                                        if ($n==$On[3]){
-                                           $Llength=$LIST->FormatTimeLen($ts[0],$length,$timebase);
-                                           $Offset=$LIST->FormatTimeOffs($ts[0],$On[0]-$OnPatternTick,$timebase);
-
-                                            ${"events".$i}[$j]="
-                <Note Offset=\"$Offset[0]:$Offset[1]:$Offset[2]\" Pitch=\"$n\" Velocity=\"$On[1]\" Length=\"$Llength[0]:$Llength[1]:$Llength[2]\"/>";
-                                           $LIST->ListDelete($z);
-
-                                        }
-
-                                         elseif ($n!=$On[3] AND $n==$On2[3]){
-
-                                           $Llength2=$LIST2->FormatTimeLen($ts[0],$length2,$timebase);
-                                           $Offset2=$LIST2->FormatTimeOffs($ts[0],$On2[0]-$OnPatternTick,$timebase);
-
-                                           ${"events".$i}[$j]="
-                <Note Offset=\"$Offset2[0]:$Offset2[1]:$Offset2[2]\" Pitch=\"$n\" Velocity=\"$On2[1]\" Length=\"$Llength2[0]:$Llength2[1]:$Llength2[2]\"/>";
-                                           $LIST2->ListDelete($zz);
-
-                                        }
-                                        else{}
-                                         ${"patternLen".$i}=$LIST->patternLength($ts[0],$t,$timebase,$OnPatternTick);
-                                         ${"sectionLen".$i}=$LIST->sectionLength($ts[0],$t,$timebase);
-                                         $songLen[$i]=$t;
-                                         //$songLen=$t;
-                                         //echo $songLen;
-                                          //echo ${"songLen".$i};
-                                          //echo ("<br>");
-                               }   //  MSG=OFF IF SATSEN
-
-			       elseif ($msg[1]=='Meta' AND $msg[2]=='TrkName'){
-					$txttypes = array('Text','Copyright','TrkName','InstrName','Lyric','Marker','Cue');
-					$mtype = $msg[2];
-
-					$pos = array_search($mtype, $txttypes);
-					if ($pos !== FALSE){
-						$tags = array('TextEvent','CopyrightNotice','TrackName','InstrumentName','Lyric','Marker','CuePoint');
-						$tag = $tags[$pos];
-						$line = $track[$j];
-						$start = strpos($line,'"')+1;
-						$end = strrpos($line,'"');
-						$txt = substr($line,$start,$end-$start);
-						//$xml .= "$msg[2]";
-						${"TrackName".$i} = htmlspecialchars($txt);
-					}
-                                }
-		}    //HÄR STÄNGS EVENTLOOPEN for $j
-
-         if (${"events".$i}!=null){  //      om det inte finns några events i ett visst track/pattern =skriv inte ut
-                    //$tempo=$i*10;
-                    $xml .= "
-          <Pattern Name=\"Pattern$i\" Offset=\"001:01:001\" Length=\"".${"patternLen".$i}."\" Colour=\"#6B8087\">
-             <EventList>";
-    
-             for ($k=0;$k<$mc;$k++){
-                    $xml.=${"events".$i}[$k];
-             }
-
-      	    $xml .= "\n             </EventList>\n";
-            $xml .= "          </Pattern>\n";
-          } //if   events=null
-
-        } //HÄR STÄNGS TRACKLOOPEN $i
-
-
-        $xml .= "      </PatternList>\n
-        \n      <SectionList>";
-
-           $xml .= "\n          <Section Offset=\"001:01:001\" Length=\"".${"sectionLen".$l}."\" Colour=\"#6B8087\">";
-
-          for ($l;$l<$tc;$l++){
-             if (${"events".$l}!=null){
-                             $xml .= "\n            <Pattern Name=\"Pattern$l\" Offset=\"".${"OnPattern".$l}."\">
-                 <Target Name=\"".${"TrackName".$l}."\" Class=\"Instrument\"/>
-              </Pattern>\n";
-
-             }
-        }
-            $xml .="          </Section>\n";
-            $xml .="      </SectionList>\n";
-
-              $max=  max($songLen);
-              $SongLength=$LIST->sectionLength($ts[0],$max,$timebase);
-
-              $xml .="\n      <Song Name=\"\" Offset=\"001:01:001\" Length=\"$SongLength\">
-        <Section Name=\"Section\" Offset=\"001:01:001\"/>
-      </Song>\n
-    </Sequencer>\n
-       <InstrumentList>\n";
-
-              for ($m;$m<$tc;$m++){
-                if (${"events".$m}!=null){
-		$xml .=	"          <Instrument Name=\"".${"TrackName".$m}."\" Engine=\"Sampler\" SampleRate=\"44100\" Channels=\"2\" Polyphony=\"16\">
-                     <Zone index=\"34\" filename=\"piano.wav\" end=\"30000\" root_note=\"60\" release=\"127\" mix=\"80\" pitched=\"True\"/>
-           </Instrument>\n";
-                }
-	     }
-	      $xml .="       </InstrumentList>\n\n";
-
-    $xml .= "       </Studio>
-    <ViewList/>\n";
-$xml .= "</GriffDocument>";
-	return $xml;
-}
-
-
 //---------------------------------------------------------------
 // returns MIDI XML representation (v0.9, http://www.musicxml.org/dtds/midixml.dtd)
 //---------------------------------------------------------------
@@ -534,26 +322,26 @@ function getXml($ttype=0){ //0:absolute, 1:delta
 <TimestampType>".($ttype==1?'Delta':'Absolute')."</TimestampType>\n";
 
   for ($i=0;$i<$tc;$i++){
-  	$xml .= "<Track Number=\"$i\">\n";
-  	$track = $tracks[$i];
-  	$mc = count($track);
-  	$last = 0;
-  	for ($j=0;$j<$mc;$j++){
-  		$msg = explode(' ',$track[$j]);
-  		$t = (int) $msg[0];
-  		if ($ttype==1){//delta
-  			$dt = $t - $last;
-  			$last = $t;
-  		}
-  		$xml .= "  <Event>\n";
-  		$xml .= ($ttype==1)?"    <Delta>$dt</Delta>\n":"    <Absolute>$t</Absolute>\n";
-  		$xml .= '    ';
+	$xml .= "<Track Number=\"$i\">\n";
+	$track = $tracks[$i];
+	$mc = count($track);
+	$last = 0;
+	for ($j=0;$j<$mc;$j++){
+		$msg = explode(' ',$track[$j]);
+		$t = (int) $msg[0];
+		if ($ttype==1){//delta
+			$dt = $t - $last;
+			$last = $t;
+		}
+		$xml .= "  <Event>\n";
+		$xml .= ($ttype==1)?"    <Delta>$dt</Delta>\n":"    <Absolute>$t</Absolute>\n";
+		$xml .= '    ';
 
 			switch($msg[1]){
 				case 'PrCh':
 					eval("\$".$msg[2].';'); // $ch
 					eval("\$".$msg[3].';'); // $p
-   				$xml .= "<ProgramChange Channel=\"$ch\" Number=\"$p\"/>\n";
+				$xml .= "<ProgramChange Channel=\"$ch\" Number=\"$p\"/>\n";
 					break;
 
 				case 'On':
@@ -561,37 +349,37 @@ function getXml($ttype=0){ //0:absolute, 1:delta
 					eval("\$".$msg[2].';'); // $ch
 					eval("\$".$msg[3].';'); // $n
 					eval("\$".$msg[4].';'); // $v
-   				$xml .= "<Note{$msg[1]} Channel=\"$ch\" Note=\"$n\" Velocity=\"$v\"/>\n";
+				$xml .= "<Note{$msg[1]} Channel=\"$ch\" Note=\"$n\" Velocity=\"$v\"/>\n";
 					break;
 
 				case 'PoPr':
 					eval("\$".$msg[2].';'); // $ch
 					eval("\$".$msg[3].';'); // $n
 					eval("\$".$msg[4].';'); // $v
-				$xml .= "<PolyKeyPressure Channel=\"$ch\" Note=\"$n\" Pressure=\"$v\"/>\n";
+					$xml .= "<PolyKeyPressure Channel=\"$ch\" Note=\"$n\" Pressure=\"$v\"/>\n";
 					break;
 
 				case 'Par':
 					eval("\$".$msg[2].';'); // ch
 					eval("\$".$msg[3].';'); // c
 					eval("\$".$msg[4].';'); // v
-			 	$xml .= "<ControlChange Channel=\"$ch\" Control=\"$c\" Value=\"$v\"/>\n";
+					$xml .= "<ControlChange Channel=\"$ch\" Control=\"$c\" Value=\"$v\"/>\n";
 					break;
 
 				case 'ChPr':
 					eval("\$".$msg[2].';'); // ch
 					eval("\$".$msg[3].';'); // v
-				$xml .= "<ChannelKeyPressure Channel=\"$ch\" Pressure=\"$v\"/>\n";
+					$xml .= "<ChannelKeyPressure Channel=\"$ch\" Pressure=\"$v\"/>\n";
 					break;
 
 				case 'Pb':
 					eval("\$".$msg[2].';'); // ch
 					eval("\$".$msg[3].';'); // v
-				$xml .= "<PitchBendChange Channel=\"$ch\" Value=\"$v\"/>\n";
+					$xml .= "<PitchBendChange Channel=\"$ch\" Value=\"$v\"/>\n";
 					break;
 
 				case 'Seqnr':
-				$xml .= "<SequenceNumber Value=\"{$msg[2]}\"/>\n";
+					$xml .= "<SequenceNumber Value=\"{$msg[2]}\"/>\n";
 					break;
 
 				case 'Meta':
@@ -609,9 +397,9 @@ function getXml($ttype=0){ //0:absolute, 1:delta
 						$xml .= "<$tag>".htmlspecialchars($txt)."</$tag>\n";
 					}else{
 						if ($mtype == 'TrkEnd')
-    					$xml .= "<EndOfTrack/>\n";
+						$xml .= "<EndOfTrack/>\n";
 						elseif ($mtype == '0x20' || $mtype == '0x21') // ChannelPrefix ???
-    					$xml .= "<MIDIChannelPrefix Value=\"{$msg[3]}\"/>\n";
+						$xml .= "<MIDIChannelPrefix Value=\"{$msg[3]}\"/>\n";
 					}
 					break;
 
@@ -625,7 +413,7 @@ function getXml($ttype=0){ //0:absolute, 1:delta
 
 				case 'TimeSig': // LogDenum???
 					$ts = explode('/',$msg[2]);
-    			$xml .= "<TimeSignature Numerator=\"{$ts[0]}\" LogDenominator=\"".log($ts[1])/log(2)."\" MIDIClocksPerMetronomeClick=\"{$msg[3]}\" ThirtySecondsPer24Clocks=\"{$msg[4]}\"/>\n";
+				$xml .= "<TimeSignature Numerator=\"{$ts[0]}\" LogDenominator=\"".log($ts[1])/log(2)."\" MIDIClocksPerMetronomeClick=\"{$msg[3]}\" ThirtySecondsPer24Clocks=\"{$msg[4]}\"/>\n";
 					break;
 
 				case 'KeySig':
@@ -646,19 +434,27 @@ function getXml($ttype=0){ //0:absolute, 1:delta
 					$str = trim(strtoupper($str));
 					$xml .= "<SystemExclusive>$str</SystemExclusive>\n";
 					break;
-
+/* TODO:
+<AllSoundOff Channel="9"/>
+<ResetAllControllers Channel="9"/>
+<LocalControl Channel="9" Value="on"/>
+<AllNotesOff Channel="9"/>
+<OmniOff Channel="9"/>
+<OmniOn Channel="9"/>
+<MonoMode Channel="9" Value="5"/>
+<PolyMode Channel="9"/>
+*/
 				default:
-					_err('>>> unknown event: '.$msg[1]);
+					_err('unknown event: '.$msg[1]);
 					exit();
 			}
 			$xml .= "  </Event>\n";
-  	}
-  	$xml .= "</Track>\n";
+	}
+	$xml .= "</Track>\n";
   }
   $xml .= "</MIDIFile>";
 	return $xml;
 }
-
 
 //---------------------------------------------------------------
 // import MIDI XML representation
@@ -675,7 +471,7 @@ function importXml($xmlStr){
 	xml_set_element_handler($this->xml_parser, "_startElement", "_endElement");
 	xml_set_character_data_handler($this->xml_parser,"_chData");
 	if (!xml_parse($this->xml_parser, $xmlStr, TRUE))
-		die(sprintf("XML error: %s at line %d",	xml_error_string(xml_get_error_code($this->xml_parser)),xml_get_current_line_number($this->xml_parser)));
+		die(sprintf("XML error: %s at line %d", xml_error_string(xml_get_error_code($this->xml_parser)),xml_get_current_line_number($this->xml_parser)));
 	xml_parser_free($this->xml_parser);
 }
 
@@ -686,14 +482,14 @@ function importXml($xmlStr){
 // (if optional parameter $tn set, only track $tn is imported)
 //---------------------------------------------------------------
 function importMid($smf_path){
-	$SMF = fopen($smf_path, "r"); // Standard MIDI File, typ 0 or 1
+	$SMF = fopen($smf_path, "rb"); // Standard MIDI File, typ 0 or 1
 	$song = fread($SMF,filesize($smf_path));
 	fclose($SMF);
-  if (strpos($song,'MThd')>0) $song = substr($song,strpos($song,'MThd'));//get rid of RMID header
+	if (strpos($song,'MThd')>0) $song = substr($song,strpos($song,'MThd'));//get rid of RMID header
 	$header = substr($song,0,14);
-	if (substr($header,0,8)!="MThd\0\0\0\6") _err('>>> wrong MIDI-header!');
+	if (substr($header,0,8)!="MThd\0\0\0\6") _err('wrong MIDI-header');
 	$type = ord($header[9]);
-	if ($type>1) _err('>>> only SMF Typ 0 and 1 supported!');
+	if ($type>1) _err('only SMF Typ 0 and 1 supported');
 	//$trackCnt = ord($header[10])*256 + ord($header[11]); //ignore
 	$timebase = ord($header[12])*256 + ord($header[13]);
 
@@ -706,10 +502,10 @@ function importMid($smf_path){
 	$tsc = count($trackStrings);
 	if (func_num_args()>1){
 		$tn =  func_get_arg(1);
-		if ($tn>=$tsc) _err('>>> SMF has less tracks than $tn!');
+		if ($tn>=$tsc) _err('SMF has less tracks than $tn');
 		$tracks[] = $this->_parseTrack($trackStrings[$tn],$tn);
 	} else
-		for ($i=0;$i<$tsc;$i++) $tracks[] = $this->_parseTrack($trackStrings[$i],$i);
+		for ($i=0;$i<$tsc;$i++)  $tracks[] = $this->_parseTrack($trackStrings[$i],$i);
 	$this->tracks = $tracks;
 }
 
@@ -736,13 +532,11 @@ function getMid(){
 			$dt = $t - $time;
 			$time = $t;
 			$midStr .= _writeVarLen($dt);
-			//$midStr .= $this->_getMsgStr($line);
 
 			// repetition, same event, same channel, omit first byte (smaller file size)
-			// TODO: same for PoPr,ChPr,Par,Pb
 			$str = $this->_getMsgStr($line);
 			$start = ord($str[0]);
-			if ($start>=0x80 && $start<=0x9F && $start==$last) $str = substr($str, 1);
+			if ($start>=0x80 && $start<=0xEF && $start==$last) $str = substr($str, 1);
 			$last = $start;
 
 			$midStr .= $str;
@@ -757,7 +551,7 @@ function getMid(){
 // saves MIDI song as Standard MIDI File
 //---------------------------------------------------------------
 function saveMidFile($mid_path){
-	if (count($this->tracks)<1) _err('MIDI song has no tracks!');
+	if (count($this->tracks)<1) _err('MIDI song has no tracks');
 	$SMF = fopen($mid_path, "wb"); // SMF
 	fwrite($SMF,$this->getMid());
 	fclose($SMF);
@@ -833,19 +627,26 @@ function playMidFile($file,$visible=1,$auto=1,$loop=1,$plug=''){
 }
 
 //---------------------------------------------------------------
-// starts download of Standard MIDI File
+// starts download of Standard MIDI File, either from memory or from the server's filesystem
+// ATTENTION: order of params swapped, so $file can be omitted to directly start download
 //---------------------------------------------------------------
-function downloadMidFile($file,$output){
+function downloadMidFile($output, $file=false){
+	ob_start("ob_gzhandler"); // for compressed output...
+
 	//$mime_type = 'audio/midi';
 	$mime_type = 'application/octetstream'; // force download
+
 	header('Content-Type: '.$mime_type);
 	header('Expires: '.gmdate('D, d M Y H:i:s').' GMT');
 	header('Content-Disposition: attachment; filename="'.$output.'"');
 	header('Pragma: no-cache');
 
-	$d=fopen($file,"r");
-	fpassthru($d);
-	@fclose($d);
+	if ($file){
+		$d=fopen($file,"rb");
+		fpassthru($d);
+		@fclose($d);
+	}else
+		echo $this->getMid();
 	exit();
 }
 
@@ -935,7 +736,7 @@ function getDrumkitList(){
 // returns list of note names
 //---------------------------------------------------------------
 function getNoteList(){
-	//note 69 (A6) = A440
+  //note 69 (A6) = A440
   //note 60 (C6) = Middle C
 	return array(
 	//Do          Re           Mi    Fa           So           La           Ti
@@ -1009,17 +810,16 @@ function _getMsgStr($line){
 		case 'Pb': // 0x0E = PitchBend
 			eval("\$".$msg[2].';'); // chan
 			eval("\$".$msg[3].';'); // val (2 Bytes!)
-			$a = $v % 256;
-			$b = 64 + ($v - $a)/128;
+			$a = $v & 0x7f; // Bits 0..6
+			$b = ($v >> 7) & 0x7f; // Bits 7..13
 			return chr(0xE0+$ch-1).chr($a).chr($b);
 			break;
-
 		// META EVENTS
 		case 'Seqnr': // 0x00 = sequence_number
 			$num = chr($msg[2]);
-			return "\xFF\x00\x02$num";
+			if ($msg[2]>255) _err("code broken around Seqnr event");
+			return "\xFF\x00\x02\x00$num";
 			break;
-
 		case 'Meta':
 			$type = $msg[2];
 			switch ($type){
@@ -1035,7 +835,9 @@ function _getMsgStr($line){
 					$start = strpos($line,'"')+1;
 					$end = strrpos($line,'"');
 					$txt = substr($line,$start,$end-$start);
+// MM: Todo: Len could also be more than one Byte (variable length; see. "Sequence/Track name specification)
 					$len = chr(strlen($txt));
+					if ($len>127) _err("code broken (write varLen-Meta)");
 					return "\xFF$byte$len$txt";
 					break;
 				case 'TrkEnd': //0x2F
@@ -1050,7 +852,7 @@ function _getMsgStr($line){
 					return "\xFF\x21\x01$v";
 					break;
 				default:
-					_err(">>> unknown meta event: $type");
+					_err("unknown meta event: $type");
 					exit();
 			}
 			break;
@@ -1084,8 +886,9 @@ function _getMsgStr($line){
 			$data = '';
 			for ($i=0;$i<$cnt;$i++)
 				$data.=_hex2bin($msg[$i+2]);
-
+// MM: ToDo: Len >127 has to be variable length-encoded !!!
 			$len = chr(strlen($data));
+			if ($len>127) _err('code broken (write varLen-Meta)');
 			return "\xFF\x7F$len$data";
 			break;
 		case 'SysEx': // 0xF0 = SysEx
@@ -1098,7 +901,7 @@ function _getMsgStr($line){
 			break;
 
 		default:
-			_err('>>> unknown event: '.$msg[1]);
+			_err('unknown event: '.$msg[1]);
 			exit();
 	}
 }
@@ -1107,205 +910,231 @@ function _getMsgStr($line){
 // converts binary track string to track (list of msg strings)
 //---------------------------------------------------------------
 function _parseTrack($binStr, $tn){
+	//$trackLen2 =  ((( (( (ord($binStr[0]) << 8) | ord($binStr[1]))<<8) | ord($binStr[2]) ) << 8 ) |  ord($binStr[3]) );
+	//$trackLen2 += 4;
 	$trackLen = strlen($binStr);
-	$p=4;
-	$time = 0;
-	$track = array();
-	while ($p<$trackLen){
+// MM: ToDo: Warn if trackLen and trackLen2 are different!!!
+// if ($trackLen != $trackLen2) { echo "Warning: TrackLength is corrupt ($trackLen != $trackLen2)! \n"; }
+  $p=4;
+  $time = 0;
+  $track = array();
+  while ($p<$trackLen){
+	  // timedelta
+	  $dt = _readVarLen($binStr,$p);
+	  $time += $dt;
 
-		// timedelta
-		$dt = _readVarLen($binStr,$p);
-		$time += $dt;
+	  $byte = ord($binStr[$p]);
+	  $high = $byte >> 4;
+	  $low = $byte - $high*16;
+	  switch($high){
+		  case 0x0C: //PrCh = ProgramChange
+			  $chan = $low+1;
+			  $prog = ord($binStr[$p+1]);
+			  $last = 'PrCh';
+			  $track[] = "$time PrCh ch=$chan p=$prog";
+			  $p+=2;
+			  break;
+		  case 0x09: //On
+			  $chan = $low+1;
+			  $note = ord($binStr[$p+1]);
+			  $vel = ord($binStr[$p+2]);
+			  $last = 'On';
+			  $track[] = "$time On ch=$chan n=$note v=$vel";
+			  $p+=3;
+			  break;
+		  case 0x08: //Off
+			  $chan = $low+1;
+			  $note = ord($binStr[$p+1]);
+			  $vel = ord($binStr[$p+2]);
+			  $last = 'Off';
+			  $track[] = "$time Off ch=$chan n=$note v=$vel";
+			  $p+=3;
+			  break;
+		  case 0x0A: //PoPr = PolyPressure
+			  $chan = $low+1;
+			  $note = ord($binStr[$p+1]);
+			  $val = ord($binStr[$p+2]);
+			  $last = 'PoPr';
+			  $track[] = "$time PoPr ch=$chan n=$note v=$val";
+			  $p+=3;
+			  break;
+		  case 0x0B: //Par = ControllerChange
+			  $chan = $low+1;
+			  $c = ord($binStr[$p+1]);
+			  $val = ord($binStr[$p+2]);
+			  $last = 'Par';
+			  $track[] = "$time Par ch=$chan c=$c v=$val";
+			  $p+=3;
+			  break;
+		  case 0x0D: //ChPr = ChannelPressure
+			  $chan = $low+1;
+			  $val = ord($binStr[$p+1]);
+			  $last = 'ChPr';
+			  $track[] = "$time ChPr ch=$chan v=$val";
+			  $p+=2;
+			  break;
+		  case 0x0E: //Pb = PitchBend
+			  $chan = $low+1;
+			  $val = (ord($binStr[$p+1]) & 0x7F) | (((ord($binStr[$p+2])) & 0x7F) << 7);
+			  $last = 'Pb';
+			  $track[] = "$time Pb ch=$chan v=$val";
+			  $p+=3;
+			  break;
+		  default:
+			  switch($byte){
+				  case 0xFF: // Meta
+					  $meta = ord($binStr[$p+1]);
+					  switch ($meta){
+						  case 0x00: // sequence_number
+							  $tmp = ord($binStr[$p+2]);
+							  if ($tmp==0x00) { $num = $tn; $p+=3;}
+							  else { $num= 1; $p+=5; }
+							  $track[] = "$time Seqnr $num";
+							  break;
 
-		$byte = ord($binStr[$p]);
-		$high = $byte >> 4;
-		$low = $byte - $high*16;
+						  case 0x01: // Meta Text
+						  case 0x02: // Meta Copyright
+						  case 0x03: // Meta TrackName ???sequence_name???
+						  case 0x04: // Meta InstrumentName
+						  case 0x05: // Meta Lyrics
+						  case 0x06: // Meta Marker
+						  case 0x07: // Meta Cue
+							  $texttypes = array('Text','Copyright','TrkName','InstrName','Lyric','Marker','Cue');
+							  $type = $texttypes[$meta-1];
+							  $p +=2;
+							  $len = _readVarLen($binStr, $p);
+							  if (($len+$p) > $trackLen) _err("Meta $type has corrupt variable length field ($len) [track: $tn dt: $dt]");
+							  $txt = substr($binStr, $p,$len);
+							  $track[] = "$time Meta $type \"$txt\"";
+							  $p+=$len;
+							  break;
+						  case 0x20: // ChannelPrefix
+							$chan = ord($binStr[$p+3]);
+							if ($chan<10) $chan = '0'.$chan;//???
+							  $track[] = "$time Meta 0x20 $chan";
+							  $p+=4;
+							  break;
+						  case 0x21: // ChannelPrefixOrPort
+							$chan = ord($binStr[$p+3]);
+							if ($chan<10) $chan = '0'.$chan;//???
+							  $track[] = "$time Meta 0x21 $chan";
+							  $p+=4;
+							  break;
+						  case 0x2F: // Meta TrkEnd
+							  $track[] = "$time Meta TrkEnd";
+							  return $track;//ignore rest
+							  break;
+						  case 0x51: // Tempo
+							  $tempo = ord($binStr[$p+3])*256*256 + ord($binStr[$p+4])*256 + ord($binStr[$p+5]);
+							  $track[] = "$time Tempo $tempo";
+							  if ($tn==0 && $time==0) {
+								  $this->tempo = $tempo;// ???
+								  $this->tempoMsgNum = count($track) - 1;
+							  }
+							  $p+=6;
+							  break;
+						  case 0x54: // SMPTE offset
+							  $h = ord($binStr[$p+3]);
+							  $m = ord($binStr[$p+4]);
+							  $s = ord($binStr[$p+5]);
+							  $f = ord($binStr[$p+6]);
+							  $fh = ord($binStr[$p+7]);
+							  $track[] = "$time SMPTE $h $m $s $f $fh";
+							  $p+=8;
+							  break;
+						  case 0x58: // TimeSig
+							  $z = ord($binStr[$p+3]);
+							  $t = pow(2,ord($binStr[$p+4]));
+							  $mc = ord($binStr[$p+5]);
+							  $c = ord($binStr[$p+6]);
+							  $track[] = "$time TimeSig $z/$t $mc $c";
+							  $p+=7;
+							  break;
+						  case 0x59: // KeySig
+							  $vz = ord($binStr[$p+3]);
+							  $g = ord($binStr[$p+4])==0?'major':'minor';
+							  $track[] = "$time KeySig $vz $g";
+							  $p+=5;
+							  break;
+						  case 0x7F: // Sequencer specific data (string or hexString???)
+							  $p +=2;
+							  $len = _readVarLen($binStr, $p);
+							  if (($len+$p) > $trackLen) _err("SeqSpec has corrupt variable length field ($len) [track: $tn dt: $dt]");
+							  $p-=3;
+							  $data='';
+							  for ($i=0;$i<$len;$i++) $data.=' '.sprintf("%02x",ord($binStr[$p+3+$i]));
+							  $track[] = "$time SeqSpec$data";
+							  $p+=$len+3;
+							  break;
 
-		switch($high){
-			case 0x0C: //PrCh = ProgramChange
-				$chan = $low+1;
-				$prog = ord($binStr[$p+1]);
-				$track[] = "$time PrCh ch=$chan p=$prog";
-				$p+=2;
-				break;
-			case 0x09: //On
-				$chan = $low+1;
-				$note = ord($binStr[$p+1]);
-				$vel = ord($binStr[$p+2]);
-				$last = 'On';
-				$track[] = "$time On ch=$chan n=$note v=$vel";
-				$p+=3;
-				break;
-			case 0x08: //Off
-				$chan = $low+1;
-				$note = ord($binStr[$p+1]);
-				$vel = ord($binStr[$p+2]);
-				$last = 'Off';
-				$track[] = "$time Off ch=$chan n=$note v=$vel";
-				$p+=3;
-				break;
-			case 0x0A: //PoPr = PolyPressure
-				$chan = $low+1;
-				$note = ord($binStr[$p+1]);
-				$val = ord($binStr[$p+2]);
-				$last = 'PoPr';
-				$track[] = "$time PoPr ch=$chan n=$note v=$val";
-				$p+=3;
-				break;
-			case 0x0B: //Par = ControllerChange
-				$chan = $low+1;
-				$c = ord($binStr[$p+1]);
-				$val = ord($binStr[$p+2]);
-				$last = 'Par';
-				$track[] = "$time Par ch=$chan c=$c v=$val";
-				$p+=3;
-				break;
-			case 0x0D: //ChPr = ChannelPressure
-				$chan = $low+1;
-				$val = ord($binStr[$p+1]);
-				$last = 'ChPr';
-				$track[] = "$time ChPr ch=$chan v=$val";
-				$p+=2;
-				break;
-			case 0x0E: //Pb = PitchBend
-				$chan = $low+1;
-				$val = ord($binStr[$p+1]) + (ord($binStr[$p+2])-64)*128;
-				$last = 'Pb';
-				$track[] = "$time Pb ch=$chan v=$val";
-				$p+=3;
-				break;
-			default:
-				switch($byte){
-					case 0xFF: // Meta
-						$meta = ord($binStr[$p+1]);
-						switch ($meta){
-							case 0x00: // sequence_number
-								$num = ord($binStr[$p+2]);
-								$track[] = "$time Seqnr $num";
-								$p+=2;
-								break;
+						  default:
+// MM added: accept "unknown" Meta-Events
+							  $metacode = sprintf("%02x", ord($binStr[$p+1]) );
+							  $p +=2;
+							  $len = _readVarLen($binStr, $p);
+							  if (($len+$p) > $trackLen) _err("Meta $metacode has corrupt variable length field ($len) [track: $tn dt: $dt]");
+							  $p -=3;
+							  $data='';
+							  for ($i=0;$i<$len;$i++) $data.=' '.sprintf("%02x",ord($binStr[$p+3+$i]));
+							  $track[] = "$time Meta 0x$metacode $data";
+							  $p+=$len+3;
+							  break;
+					  } // switch ($meta)
+					  break; // Ende Meta
 
-							case 0x01: // Meta Text
-							case 0x02: // Meta Copyright
-							case 0x03: // Meta TrackName ???sequence_name???
-							case 0x04: // Meta InstrumentName
-							case 0x05: // Meta Lyrics
-							case 0x06: // Meta Marker
-							case 0x07: // Meta Cue
-								$texttypes = array('Text','Copyright','TrkName','InstrName','Lyric','Marker','Cue');
-								$type = $texttypes[$meta-1];
-								$len = ord($binStr[$p+2]);
-								$txt = substr($binStr, $p+3,$len);
-								$track[] = "$time Meta $type \"$txt\"";
-								$p+=$len+3;
-								break;
-							case 0x20: // ChannelPrefix
-							  $chan = ord($binStr[$p+3]);
-							  if ($chan<10) $chan = '0'.$chan;//???
-								$track[] = "$time Meta 0x20 $chan";
-								$p+=4;
-								break;
-							case 0x21: // ChannelPrefixOrPort
-							  $chan = ord($binStr[$p+3]);
-							  if ($chan<10) $chan = '0'.$chan;//???
-								$track[] = "$time Meta 0x21 $chan";
-								$p+=4;
-								break;
-							case 0x2F: // Meta TrkEnd
-								$track[] = "$time Meta TrkEnd";
-								return $track;//ignore rest
-								//$p+=3;
-								break;
-							case 0x51: // Tempo
-								$tempo = ord($binStr[$p+3])*256*256 + ord($binStr[$p+4])*256 + ord($binStr[$p+5]);
-								$track[] = "$time Tempo $tempo";
-								if ($tn==0 && $time==0) {
-									$this->tempo = $tempo;// ???
-									$this->tempoMsgNum = count($track) - 1;
-								}
-								$p+=6;
-								break;
-							case 0x54: // SMPTE offset
-								$h = ord($binStr[$p+3]);
-								$m = ord($binStr[$p+4]);
-								$s = ord($binStr[$p+5]);
-								$f = ord($binStr[$p+6]);
-								$fh = ord($binStr[$p+7]);
-								$track[] = "$time SMPTE $h $m $s $f $fh";
-								$p+=8;
-								break;
-							case 0x58: // TimeSig
-								$z = ord($binStr[$p+3]);
-								$t = pow(2,ord($binStr[$p+4]));
-								$mc = ord($binStr[$p+5]);
-								$c = ord($binStr[$p+6]);
-								$track[] = "$time TimeSig $z/$t $mc $c";
-								$p+=7;
-								break;
-							case 0x59: // KeySig
-								$vz = ord($binStr[$p+3]);
-								$g = ord($binStr[$p+4])==0?'major':'minor';
-								$track[] = "$time KeySig $vz $g";
-								$p+=5;
-								break;
-							case 0x7F: // Sequencer specific data (string or hexString???)
-								$len = ord($binStr[$p+2]);
-								$data='';
-								for ($i=0;$i<$len;$i++) $data.=' '.sprintf("%02x",ord($binStr[$p+3+$i]));
-								$track[] = "$time SeqSpec$data";
-								$p+=$len+3;
-								break;
-							default:
-								_err(">>> unknown meta event: $time $byte $meta");
-						}
-						break; // Ende Meta
-
-					case 0xF0: // SysEx
-						$len = ord($binStr[$p+1]);
-						$str = 'f0';
-						for ($i=0;$i<$len;$i++) $str.=' '.sprintf("%02x",ord($binStr[$p+2+$i]));
-						$track[] = "$time SysEx $str";
-						$p+=$len+2;
-						break;
-
-					default: //Repetition of last event?
-						switch ($last){
-							case 'On':
-							case 'Off':
-								$note = ord($binStr[$p]);
-								$vel = ord($binStr[$p+1]);
-								$track[] = "$time $last ch=$chan n=$note v=$vel";
-								$p+=2;
-								break;
-							case 'PoPr':
-								$note = ord($binStr[$p+1]);
-								$val = ord($binStr[$p+2]);
-								$track[] = "$time PoPr ch=$chan n=$note v=$val";
-								$p+=2;
-								break;
-							case 'ChPr':
-								$val = ord($binStr[$p]);
-								$track[] = "$time ChPr ch=$chan v=$val";
-								$p+=1;
-								break;
-							case 'Par':
-								$c = ord($binStr[$p]);
-								$val = ord($binStr[$p+1]);
-								$track[] = "$time Par ch=$chan c=$c v=$val";
-								$p+=2;
-								break;
-							case 'Pb':
-								$val = ord($binStr[$p])+ ord($binStr[$p+1])*128;
-								$track[] = "$time Pb ch=$chan v=$val";
-								$p+=2;
-								break;
-							default:
-								_err(">>> unknown repetition: $last");
-						}
-				}
-		}
-	}
-	return $track;
+				  case 0xF0: // SysEx
+					  $p +=1;
+					  $len = _readVarLen($binStr, $p);
+					  if (($len+$p) > $trackLen) _err("SysEx has corrupt variable length field ($len) [track: $tn dt: $dt p: $p]");
+					  $str = 'f0';
+					  for ($i=0;$i<$len;$i++) $str.=' '.sprintf("%02x",ord($binStr[$p+$i])); # FIXED
+					  $track[] = "$time SysEx $str";
+					  $p+=$len;
+					  break;
+				  default: // Repetition of last event?
+					  switch ($last){
+						  case 'On':
+						  case 'Off':
+							  $note = ord($binStr[$p]);
+							  $vel = ord($binStr[$p+1]);
+							  $track[] = "$time $last ch=$chan n=$note v=$vel";
+							  $p+=2;
+							  break;
+						  case 'PrCh':
+							  $prog = ord($binStr[$p]);
+							  $track[] = "$time PrCh ch=$chan p=$prog";
+							  $p+=1;
+							  break;
+						  case 'PoPr':
+							  $note = ord($binStr[$p+1]);
+							  $val = ord($binStr[$p+2]);
+							  $track[] = "$time PoPr ch=$chan n=$note v=$val";
+							  $p+=2;
+							  break;
+						  case 'ChPr':
+							  $val = ord($binStr[$p]);
+							  $track[] = "$time ChPr ch=$chan v=$val";
+							  $p+=1;
+							  break;
+						  case 'Par':
+							  $c = ord($binStr[$p]);
+							  $val = ord($binStr[$p+1]);
+							  $track[] = "$time Par ch=$chan c=$c v=$val";
+							  $p+=2;
+							  break;
+						  case 'Pb':
+							  $val = (ord($binStr[$p])  & 0x7F) | (( ord($binStr[$p+1]) & 0x7F)<<7);
+							  $track[] = "$time Pb ch=$chan v=$val";
+							  $p+=2;
+							  break;
+						  default:
+// MM: ToDo: Repetition of SysEx and META-events? with <last>?? \n";
+							  _err("unknown repetition: $last");
+					  }  // switch ($last)
+			  } // switch ($byte)
+	  } // switch ($high)
+  } // while
+  return $track;
 }
 
 //---------------------------------------------------------------
@@ -1386,7 +1215,7 @@ function _endElement($parser, $name){
 			$a = $this->evt['atr'];
 			$typ = $this->evt['typ'];
 			$dat = $this->evt['dat'];
-			$tn = count($this->tracks)-1;//track number
+			$tn = count($this->tracks)-1;
 
 			switch ($typ){
 				case 'PROGRAMCHANGE':
@@ -1488,6 +1317,7 @@ function _chData($parser, $data){
 	$this->dat = (trim($data)=='')?'':$data;//???
 }
 
+
 } // END OF CLASS
 
 
@@ -1502,7 +1332,7 @@ function _chData($parser, $data){
 function _hex2bin($hex_str) {
 	$bin_str='';
   for ($i = 0; $i < strlen($hex_str); $i += 2) {
-    $bin_str .= chr(hexdec(substr($hex_str, $i, 2)));
+	$bin_str .= chr(hexdec(substr($hex_str, $i, 2)));
   }
   return $bin_str;
 }
@@ -1525,10 +1355,9 @@ function _readVarLen($str,&$pos){
 	if ( ($value = ord($str[$pos++])) & 0x80 ){
 		$value &= 0x7F;
 		do {
-	  	$value = ($value << 7) + (($c = ord($str[$pos++])) & 0x7F);
+		$value = ($value << 7) + (($c = ord($str[$pos++])) & 0x7F);
 		} while ($c & 0x80);
 	}
-
 	return($value);
 }
 
@@ -1570,7 +1399,10 @@ function _delta2Absolute($track){
 // error message
 //---------------------------------------------------------------
 function _err($str){
-	die($str);
+	if ((int)phpversion()>=5)
+	eval('throw new Exception($str);'); // throws php5-exceptions. the main script can deal with these errors.
+	else
+		die('>>> '.$str.'!');
 }
 
 ?>
