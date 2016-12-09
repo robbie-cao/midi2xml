@@ -16,18 +16,18 @@ foreach ($argv as $arg)
 {
     if (strpos($arg, 'timestamp') != null)
     {
-	$values = split('=', $arg);
+        $values = split('=', $arg);
 
-	if ($values[1] == 'delta') {
-	    $p['tt'] = 1;
-	}
-	elseif ($values[1] == 'absolute') {
-	    $p['tt'] = 0;
-	}
-	else {
-	    $show_help = true;
-	    break;
-	}
+        if ($values[1] == 'delta') {
+            $p['tt'] = 1;
+        }
+        elseif ($values[1] == 'absolute') {
+            $p['tt'] = 0;
+        }
+        else {
+            $show_help = true;
+            break;
+        }
     }
 }
 
@@ -41,7 +41,7 @@ $tt = isset($p['tt'])?$p['tt']:0;
 
 If ($file!='') {
     require('midi.class.php');
-    
+
     $midi = new Midi();
     $midi->importMid($file);
     $xml = $midi->getXml($tt);
